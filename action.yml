@@ -22,6 +22,14 @@ inputs:
     description: "Create a GitHub release in addition to tags (true/false)"
     required: false
     default: "true"
+  draft_release:
+    description: "Create release as a draft instead of publishing immediately (true/false)"
+    required: false
+    default: "false"
+  release_notes_file:
+    description: "Path to markdown file with custom release notes (optional, falls back to auto-generated notes)"
+    required: false
+    default: ""
   update_parent_tags:
     description: "Update parent version tags (e.g., v3 and v3.5 for v3.5.2) (true/false)"
     required: false
@@ -224,21 +232,12 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.token }}
       run: |
-        # Generate release notes
-        PREVIOUS_TAG="${{ steps.version.outputs.previous_version }}"
+        # Check if custom release notes file exists
+        if [ -n "${{ inputs.release_notes_file }}" ] && [ -f "${{ inputs.release_notes_file }}" ]; then
+          CUSTOM_NOTES=$(cat "${{ inputs.release_notes_file }}")
+          RELEASE_NOTES="$CUSTOM_NOTES
         
-        if [ "$PREVIOUS_TAG" != "none" ]; then
-          RELEASE_NOTES=$(git log ${PREVIOUS_TAG}..${{ steps.version.outputs.new_version }} --pretty=format:"- %s (%h)" --no-merges)
-        else
-          RELEASE_NOTES="Initial release"
-        fi
-        
-        # Create the release
-        gh release create "${{ steps.version.outputs.new_version }}" \
-          --title "Release ${{ steps.version.outputs.new_version }}" \
-          --notes "## Changes
-        
-        $RELEASE_NOTES
+        ---
         
         ## Version Information
         - Full version: \`${{ steps.version.outputs.new_version }}\`
@@ -260,8 +259,59 @@ runs:
         else
           echo "Parent tags not updated (update_parent_tags=false)"
         fi)"
+        else
+          # Generate auto release notes
+          PREVIOUS_TAG="${{ steps.version.outputs.previous_version }}"
+          
+          if [ "$PREVIOUS_TAG" != "none" ]; then
+            AUTO_NOTES=$(git log ${PREVIOUS_TAG}..${{ steps.version.outputs.new_version }} --pretty=format:"- %s (%h)" --no-merges)
+          else
+            AUTO_NOTES="Initial release"
+          fi
+          
+          RELEASE_NOTES="## Changes
         
-        echo "::notice::✅ Created GitHub release: ${{ steps.version.outputs.new_version }}"
+        $AUTO_NOTES
+        
+        ## Version Information
+        - Full version: \`${{ steps.version.outputs.new_version }}\`
+        - Minor version tag: \`${{ steps.version.outputs.minor_version }}\`
+        - Major version tag: \`${{ steps.version.outputs.major_version }}\`
+        
+        ## Updated Tags
+        $(if [ "${{ inputs.update_parent_tags }}" == "true" ]; then
+          if [ "${{ inputs.version_bump }}" == "patch" ]; then
+            echo "- \`${{ steps.version.outputs.minor_version }}\` → \`${{ steps.version.outputs.new_version }}\` (updated)"
+            echo "- \`${{ steps.version.outputs.major_version }}\` → \`${{ steps.version.outputs.new_version }}\` (updated)"
+          elif [ "${{ inputs.version_bump }}" == "minor" ]; then
+            echo "- \`${{ steps.version.outputs.minor_version }}\` → \`${{ steps.version.outputs.new_version }}\` (created)"
+            echo "- \`${{ steps.version.outputs.major_version }}\` → \`${{ steps.version.outputs.new_version }}\` (updated)"
+          elif [ "${{ inputs.version_bump }}" == "major" ]; then
+            echo "- \`${{ steps.version.outputs.minor_version }}\` → \`${{ steps.version.outputs.new_version }}\` (created)"
+            echo "- \`${{ steps.version.outputs.major_version }}\` → \`${{ steps.version.outputs.new_version }}\` (created)"
+          fi
+        else
+          echo "Parent tags not updated (update_parent_tags=false)"
+        fi)"
+        fi
+        
+        # Create the release (draft or published)
+        DRAFT_FLAG=""
+        if [ "${{ inputs.draft_release }}" == "true" ]; then
+          DRAFT_FLAG="--draft"
+          echo "::notice::Creating draft release: ${{ steps.version.outputs.new_version }}"
+        fi
+        
+        gh release create "${{ steps.version.outputs.new_version }}" \
+          --title "Release ${{ steps.version.outputs.new_version }}" \
+          --notes "$RELEASE_NOTES" \
+          $DRAFT_FLAG
+        
+        if [ "${{ inputs.draft_release }}" == "true" ]; then
+          echo "::notice::✅ Created draft GitHub release: ${{ steps.version.outputs.new_version }}"
+        else
+          echo "::notice::✅ Created GitHub release: ${{ steps.version.outputs.new_version }}"
+        fi
 
     - name: Generate summary output
       id: summary
