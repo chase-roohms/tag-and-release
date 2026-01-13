@@ -1,0 +1,333 @@
+---
+name: Tag and Release Semantic Version
+author: Chase Roohms
+description: Creates a semantic version release with optional parent tag updates (e.g., updating v3 and v3.5 when releasing v3.5.2)
+branding:
+  icon: 'tag'
+  color: 'green'
+
+inputs:
+  token:
+    description: "GitHub token with contents write access, defaults to GITHUB_TOKEN"
+    required: false
+    default: ${{ github.token }}
+  version_bump:
+    description: "Version bump type: major, minor, or patch"
+    required: true
+  dry_run:
+    description: "Dry run mode - calculate version but don't create tags (true/false)"
+    required: false
+    default: "false"
+  create_release:
+    description: "Create a GitHub release in addition to tags (true/false)"
+    required: false
+    default: "true"
+  update_parent_tags:
+    description: "Update parent version tags (e.g., v3 and v3.5 for v3.5.2) (true/false)"
+    required: false
+    default: "false"
+
+outputs:
+  new_version:
+    description: "The new full semantic version created (e.g., v3.5.2)"
+    value: ${{ steps.version.outputs.new_version }}
+  minor_version:
+    description: "The minor version tag (e.g., v3.5)"
+    value: ${{ steps.version.outputs.minor_version }}
+  major_version:
+    description: "The major version tag (e.g., v3)"
+    value: ${{ steps.version.outputs.major_version }}
+  previous_version:
+    description: "The previous version before this release"
+    value: ${{ steps.version.outputs.previous_version }}
+  tags_updated:
+    description: "JSON array of tags that were created or updated"
+    value: ${{ steps.summary.outputs.tags_updated }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: bash
+      run: |
+        if [[ ! "${{ inputs.version_bump }}" =~ ^(major|minor|patch)$ ]]; then
+          echo "::error::Invalid version_bump value. Must be 'major', 'minor', or 'patch'"
+          exit 1
+        fi
+
+    - name: Calculate new version
+      id: version
+      shell: bash
+      run: |
+        # Get the latest tag
+        LATEST_TAG=$(git tag --list 'v*.*.*' --sort=-v:refname | head -n1)
+        
+        # If no tags exist, always start with v1.0.0
+        if [ -z "$LATEST_TAG" ]; then
+          echo "::notice::No existing semantic version tags found, starting with v1.0.0"
+          NEW_VERSION="v1.0.0"
+          MINOR_VERSION="v1.0"
+          MAJOR_VERSION="v1"
+          PREVIOUS_VERSION="none"
+        else
+          echo "Latest tag: $LATEST_TAG"
+          PREVIOUS_VERSION="$LATEST_TAG"
+          
+          # Remove 'v' prefix and split version
+          VERSION=${LATEST_TAG#v}
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+          
+          # Increment version based on input
+          case "${{ inputs.version_bump }}" in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+          
+          NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+          MINOR_VERSION="v${MAJOR}.${MINOR}"
+          MAJOR_VERSION="v${MAJOR}"
+        fi
+        
+        echo "previous_version=$PREVIOUS_VERSION" >> $GITHUB_OUTPUT
+        echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+        echo "minor_version=$MINOR_VERSION" >> $GITHUB_OUTPUT
+        echo "major_version=$MAJOR_VERSION" >> $GITHUB_OUTPUT
+        echo "bump_type=${{ inputs.version_bump }}" >> $GITHUB_OUTPUT
+        
+        echo "::notice::New version will be: $NEW_VERSION"
+        echo "::notice::Minor version tag: $MINOR_VERSION"
+        echo "::notice::Major version tag: $MAJOR_VERSION"
+
+    - name: Check if tag exists
+      id: check_tag
+      shell: bash
+      run: |
+        if git rev-parse "${{ steps.version.outputs.new_version }}" >/dev/null 2>&1; then
+          echo "exists=true" >> $GITHUB_OUTPUT
+          echo "::error::Tag ${{ steps.version.outputs.new_version }} already exists"
+          exit 1
+        else
+          echo "exists=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Configure git
+      if: ${{ inputs.dry_run == 'false' }}
+      shell: bash
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+    - name: Create full semantic version tag
+      if: ${{ inputs.dry_run == 'false' }}
+      shell: bash
+      run: |
+        # Create and push the full semantic version tag
+        git tag -a "${{ steps.version.outputs.new_version }}" -m "Release ${{ steps.version.outputs.new_version }}"
+        git push origin "${{ steps.version.outputs.new_version }}"
+        
+        echo "::notice::✅ Created and pushed tag: ${{ steps.version.outputs.new_version }}"
+
+    - name: Update minor version tag
+      if: ${{ inputs.dry_run == 'false' && inputs.version_bump == 'patch' && inputs.update_parent_tags == 'true' }}
+      shell: bash
+      run: |
+        MINOR_TAG="${{ steps.version.outputs.minor_version }}"
+        
+        # Delete the tag locally and remotely if it exists
+        git tag -d "$MINOR_TAG" 2>/dev/null || true
+        git push origin ":refs/tags/$MINOR_TAG" 2>/dev/null || true
+        
+        # Create and push the updated minor version tag
+        git tag -a "$MINOR_TAG" -m "Release $MINOR_TAG (points to ${{ steps.version.outputs.new_version }})"
+        git push origin "$MINOR_TAG"
+        
+        echo "::notice::✅ Updated minor version tag: $MINOR_TAG -> ${{ steps.version.outputs.new_version }}"
+
+    - name: Update major version tag (for patch releases)
+      if: ${{ inputs.dry_run == 'false' && inputs.version_bump == 'patch' && inputs.update_parent_tags == 'true' }}
+      shell: bash
+      run: |
+        MAJOR_TAG="${{ steps.version.outputs.major_version }}"
+        
+        # Delete the tag locally and remotely if it exists
+        git tag -d "$MAJOR_TAG" 2>/dev/null || true
+        git push origin ":refs/tags/$MAJOR_TAG" 2>/dev/null || true
+        
+        # Create and push the updated major version tag
+        git tag -a "$MAJOR_TAG" -m "Release $MAJOR_TAG (points to ${{ steps.version.outputs.new_version }})"
+        git push origin "$MAJOR_TAG"
+        
+        echo "::notice::✅ Updated major version tag: $MAJOR_TAG -> ${{ steps.version.outputs.new_version }}"
+
+    - name: Create minor version tag (for minor releases)
+      if: ${{ inputs.dry_run == 'false' && inputs.version_bump == 'minor' && inputs.update_parent_tags == 'true' }}
+      shell: bash
+      run: |
+        MINOR_TAG="${{ steps.version.outputs.minor_version }}"
+        
+        # Delete the tag locally and remotely if it exists
+        git tag -d "$MINOR_TAG" 2>/dev/null || true
+        git push origin ":refs/tags/$MINOR_TAG" 2>/dev/null || true
+        
+        # Create and push the new minor version tag
+        git tag -a "$MINOR_TAG" -m "Release $MINOR_TAG (points to ${{ steps.version.outputs.new_version }})"
+        git push origin "$MINOR_TAG"
+        
+        echo "::notice::✅ Created minor version tag: $MINOR_TAG -> ${{ steps.version.outputs.new_version }}"
+
+    - name: Update major version tag (for minor releases)
+      if: ${{ inputs.dry_run == 'false' && inputs.version_bump == 'minor' && inputs.update_parent_tags == 'true' }}
+      shell: bash
+      run: |
+        MAJOR_TAG="${{ steps.version.outputs.major_version }}"
+        
+        # Delete the tag locally and remotely if it exists
+        git tag -d "$MAJOR_TAG" 2>/dev/null || true
+        git push origin ":refs/tags/$MAJOR_TAG" 2>/dev/null || true
+        
+        # Create and push the updated major version tag
+        git tag -a "$MAJOR_TAG" -m "Release $MAJOR_TAG (points to ${{ steps.version.outputs.new_version }})"
+        git push origin "$MAJOR_TAG"
+        
+        echo "::notice::✅ Updated major version tag: $MAJOR_TAG -> ${{ steps.version.outputs.new_version }}"
+
+    - name: Create version tags (for major releases)
+      if: ${{ inputs.dry_run == 'false' && inputs.version_bump == 'major' && inputs.update_parent_tags == 'true' }}
+      shell: bash
+      run: |
+        MAJOR_TAG="${{ steps.version.outputs.major_version }}"
+        MINOR_TAG="${{ steps.version.outputs.minor_version }}"
+        
+        # Create and push the new major version tag
+        git tag -a "$MAJOR_TAG" -m "Release $MAJOR_TAG (points to ${{ steps.version.outputs.new_version }})"
+        git push origin "$MAJOR_TAG"
+        echo "::notice::✅ Created major version tag: $MAJOR_TAG -> ${{ steps.version.outputs.new_version }}"
+        
+        # Create and push the new minor version tag
+        git tag -a "$MINOR_TAG" -m "Release $MINOR_TAG (points to ${{ steps.version.outputs.new_version }})"
+        git push origin "$MINOR_TAG"
+        echo "::notice::✅ Created minor version tag: $MINOR_TAG -> ${{ steps.version.outputs.new_version }}"
+
+    - name: Create GitHub Release
+      if: ${{ inputs.dry_run == 'false' && inputs.create_release == 'true' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        # Generate release notes
+        PREVIOUS_TAG="${{ steps.version.outputs.previous_version }}"
+        
+        if [ "$PREVIOUS_TAG" != "none" ]; then
+          RELEASE_NOTES=$(git log ${PREVIOUS_TAG}..${{ steps.version.outputs.new_version }} --pretty=format:"- %s (%h)" --no-merges)
+        else
+          RELEASE_NOTES="Initial release"
+        fi
+        
+        # Create the release
+        gh release create "${{ steps.version.outputs.new_version }}" \
+          --title "Release ${{ steps.version.outputs.new_version }}" \
+          --notes "## Changes
+        
+        $RELEASE_NOTES
+        
+        ## Version Information
+        - Full version: \`${{ steps.version.outputs.new_version }}\`
+        - Minor version tag: \`${{ steps.version.outputs.minor_version }}\`
+        - Major version tag: \`${{ steps.version.outputs.major_version }}\`
+        
+        ## Updated Tags
+        $(if [ "${{ inputs.update_parent_tags }}" == "true" ]; then
+          if [ "${{ inputs.version_bump }}" == "patch" ]; then
+            echo "- \`${{ steps.version.outputs.minor_version }}\` → \`${{ steps.version.outputs.new_version }}\` (updated)"
+            echo "- \`${{ steps.version.outputs.major_version }}\` → \`${{ steps.version.outputs.new_version }}\` (updated)"
+          elif [ "${{ inputs.version_bump }}" == "minor" ]; then
+            echo "- \`${{ steps.version.outputs.minor_version }}\` → \`${{ steps.version.outputs.new_version }}\` (created)"
+            echo "- \`${{ steps.version.outputs.major_version }}\` → \`${{ steps.version.outputs.new_version }}\` (updated)"
+          elif [ "${{ inputs.version_bump }}" == "major" ]; then
+            echo "- \`${{ steps.version.outputs.minor_version }}\` → \`${{ steps.version.outputs.new_version }}\` (created)"
+            echo "- \`${{ steps.version.outputs.major_version }}\` → \`${{ steps.version.outputs.new_version }}\` (created)"
+          fi
+        else
+          echo "Parent tags not updated (update_parent_tags=false)"
+        fi)"
+        
+        echo "::notice::✅ Created GitHub release: ${{ steps.version.outputs.new_version }}"
+
+    - name: Generate summary output
+      id: summary
+      shell: bash
+      run: |
+        # Create JSON array of updated tags
+        TAGS_UPDATED='["${{ steps.version.outputs.new_version }}"'
+        
+        if [ "${{ inputs.update_parent_tags }}" == "true" ]; then
+          if [ "${{ inputs.version_bump }}" == "patch" ]; then
+            TAGS_UPDATED="$TAGS_UPDATED, \"${{ steps.version.outputs.minor_version }}\", \"${{ steps.version.outputs.major_version }}\""
+          elif [ "${{ inputs.version_bump }}" == "minor" ]; then
+            TAGS_UPDATED="$TAGS_UPDATED, \"${{ steps.version.outputs.minor_version }}\", \"${{ steps.version.outputs.major_version }}\""
+          elif [ "${{ inputs.version_bump }}" == "major" ]; then
+            TAGS_UPDATED="$TAGS_UPDATED, \"${{ steps.version.outputs.minor_version }}\", \"${{ steps.version.outputs.major_version }}\""
+          fi
+        fi
+        
+        TAGS_UPDATED="$TAGS_UPDATED]"
+        echo "tags_updated=$TAGS_UPDATED" >> $GITHUB_OUTPUT
+        
+        # Generate summary
+        if [ "${{ inputs.dry_run }}" == "true" ]; then
+          echo "## 🧪 Dry Run - No Tags Created" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Version Information" >> $GITHUB_STEP_SUMMARY
+          echo "- **New Version**: \`${{ steps.version.outputs.new_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Previous Version**: \`${{ steps.version.outputs.previous_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Bump Type**: \`${{ inputs.version_bump }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Tags That Would Be Created/Updated" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔍 \`${{ steps.version.outputs.new_version }}\` (would be created)" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ inputs.update_parent_tags }}" == "true" ]; then
+            if [ "${{ inputs.version_bump }}" == "patch" ]; then
+              echo "- 🔍 \`${{ steps.version.outputs.minor_version }}\` (would be updated)" >> $GITHUB_STEP_SUMMARY
+              echo "- 🔍 \`${{ steps.version.outputs.major_version }}\` (would be updated)" >> $GITHUB_STEP_SUMMARY
+            elif [ "${{ inputs.version_bump }}" == "minor" ]; then
+              echo "- 🔍 \`${{ steps.version.outputs.minor_version }}\` (would be created)" >> $GITHUB_STEP_SUMMARY
+              echo "- 🔍 \`${{ steps.version.outputs.major_version }}\` (would be updated)" >> $GITHUB_STEP_SUMMARY
+            elif [ "${{ inputs.version_bump }}" == "major" ]; then
+              echo "- 🔍 \`${{ steps.version.outputs.minor_version }}\` (would be created)" >> $GITHUB_STEP_SUMMARY
+              echo "- 🔍 \`${{ steps.version.outputs.major_version }}\` (would be created)" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+        else
+          echo "## 🎉 Release Created Successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Version Information" >> $GITHUB_STEP_SUMMARY
+          echo "- **New Version**: \`${{ steps.version.outputs.new_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Previous Version**: \`${{ steps.version.outputs.previous_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Bump Type**: \`${{ inputs.version_bump }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Tags Created/Updated" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ \`${{ steps.version.outputs.new_version }}\` (new)" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ inputs.update_parent_tags }}" == "true" ]; then
+            if [ "${{ inputs.version_bump }}" == "patch" ]; then
+              echo "- ✅ \`${{ steps.version.outputs.minor_version }}\` (updated)" >> $GITHUB_STEP_SUMMARY
+              echo "- ✅ \`${{ steps.version.outputs.major_version }}\` (updated)" >> $GITHUB_STEP_SUMMARY
+            elif [ "${{ inputs.version_bump }}" == "minor" ]; then
+              echo "- ✅ \`${{ steps.version.outputs.minor_version }}\` (created)" >> $GITHUB_STEP_SUMMARY
+              echo "- ✅ \`${{ steps.version.outputs.major_version }}\` (updated)" >> $GITHUB_STEP_SUMMARY
+            elif [ "${{ inputs.version_bump }}" == "major" ]; then
+              echo "- ✅ \`${{ steps.version.outputs.minor_version }}\` (created)" >> $GITHUB_STEP_SUMMARY
+              echo "- ✅ \`${{ steps.version.outputs.major_version }}\` (created)" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+        fi
