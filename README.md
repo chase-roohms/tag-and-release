@@ -54,6 +54,24 @@ jobs:
     create_release: true
 ```
 
+### Draft Release
+
+```yaml
+- uses: chase-roohms/tag-and-release@v1
+  with:
+    version_bump: minor
+    draft_release: true
+```
+
+### Custom Release Notes
+
+```yaml
+- uses: chase-roohms/tag-and-release@v1
+  with:
+    version_bump: patch
+    release_notes_file: RELEASE_NOTES.md
+```
+
 ### Dry Run Mode
 
 ```yaml
@@ -86,6 +104,8 @@ jobs:
 | `version_bump` | Version bump type: `major`, `minor`, or `patch` | Yes | - |
 | `dry_run` | Calculate version but don't create tags | No | `false` |
 | `create_release` | Create a GitHub release in addition to tags | No | `true` |
+| `draft_release` | Create release as a draft instead of publishing immediately | No | `false` |
+| `release_notes_file` | Path to markdown file with custom release notes | No | `""` |
 | `update_parent_tags` | Update parent version tags | No | `false` |
 
 ### Version Bump Types
