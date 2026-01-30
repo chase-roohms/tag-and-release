@@ -16,7 +16,7 @@ on:
         type: boolean
         default: true
       overview_note:
-        description: 'Overview note to include at the beginning of the release notes'
+        description: 'Overview note'
         required: false
         default: ''
 
