@@ -15,6 +15,10 @@ on:
         description: 'Update parent version tags'
         type: boolean
         default: true
+      overview_note:
+        description: 'Overview note to include at the beginning of the release notes'
+        required: false
+        default: ''
 
 jobs:
   release:
@@ -30,3 +34,4 @@ jobs:
         with:
           version_bump: ${{ inputs.version_bump }}
           update_parent_tags: ${{ inputs.update_parents }}
+          overview_note: ${{ inputs.overview_note }}
