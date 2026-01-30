@@ -279,7 +279,7 @@ runs:
             AUTO_NOTES="Initial release"
           fi
           
-          RELEASE_NOTES="${{ inputs.overview_note }}"
+          RELEASE_NOTES="${{ inputs.overview_note }}
         
         ## Changes
         
