@@ -26,6 +26,10 @@ inputs:
     description: "Create release as a draft instead of publishing immediately (true/false)"
     required: false
     default: "false"
+  overview_note:
+    description: "Overview note to include in the release notes (optional, only included when auto generating notes)"
+    required: false
+    default: ""
   release_notes_file:
     description: "Path to markdown file with custom release notes (optional, falls back to auto-generated notes)"
     required: false
@@ -60,6 +64,12 @@ runs:
       run: |
         if [[ ! "${{ inputs.version_bump }}" =~ ^(major|minor|patch)$ ]]; then
           echo "::error::Invalid version_bump value. Must be 'major', 'minor', or 'patch'"
+          exit 1
+        fi
+
+        # Overview note is only used when auto-generating release notes
+        if [ -n "${{ inputs.overview_note }}" ] && [ -n "${{ inputs.release_notes_file }}" ]; then
+          echo "::error::Overview note provided with a release_notes_file. The two are mutually exclusive."
           exit 1
         fi
 
@@ -269,7 +279,9 @@ runs:
             AUTO_NOTES="Initial release"
           fi
           
-          RELEASE_NOTES="## Changes
+          RELEASE_NOTES="${{ inputs.overview_note }}"
+        
+        ## Changes
         
         $AUTO_NOTES
         
