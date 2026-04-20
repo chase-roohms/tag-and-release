@@ -61,14 +61,18 @@ runs:
   steps:
     - name: Validate inputs
       shell: bash
+      env:
+        INPUT_VERSION_BUMP: ${{ inputs.version_bump }}
+        INPUT_OVERVIEW_NOTE: ${{ inputs.overview_note }}
+        INPUT_RELEASE_NOTES_FILE: ${{ inputs.release_notes_file }}
       run: |
-        if [[ ! "${{ inputs.version_bump }}" =~ ^(major|minor|patch)$ ]]; then
+        if [[ ! "$INPUT_VERSION_BUMP" =~ ^(major|minor|patch)$ ]]; then
           echo "::error::Invalid version_bump value. Must be 'major', 'minor', or 'patch'"
           exit 1
         fi
 
         # Overview note is only used when auto-generating release notes
-        if [ -n "${{ inputs.overview_note }}" ] && [ -n "${{ inputs.release_notes_file }}" ]; then
+        if [ -n "$INPUT_OVERVIEW_NOTE" ] && [ -n "$INPUT_RELEASE_NOTES_FILE" ]; then
           echo "::error::Overview note provided with a release_notes_file. The two are mutually exclusive."
           exit 1
         fi
@@ -241,88 +245,81 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
+        INPUT_OVERVIEW_NOTE: ${{ inputs.overview_note }}
+        INPUT_RELEASE_NOTES_FILE: ${{ inputs.release_notes_file }}
+        INPUT_UPDATE_PARENT_TAGS: ${{ inputs.update_parent_tags }}
+        INPUT_VERSION_BUMP: ${{ inputs.version_bump }}
+        INPUT_DRAFT_RELEASE: ${{ inputs.draft_release }}
+        NEW_VERSION: ${{ steps.version.outputs.new_version }}
+        MINOR_VERSION: ${{ steps.version.outputs.minor_version }}
+        MAJOR_VERSION: ${{ steps.version.outputs.major_version }}
+        PREVIOUS_VERSION: ${{ steps.version.outputs.previous_version }}
       run: |
+        NOTES_FILE=$(mktemp)
+        trap 'rm -f "$NOTES_FILE"' EXIT
+
         # Check if custom release notes file exists
-        if [ -n "${{ inputs.release_notes_file }}" ] && [ -f "${{ inputs.release_notes_file }}" ]; then
-          CUSTOM_NOTES=$(cat "${{ inputs.release_notes_file }}")
-          RELEASE_NOTES="$CUSTOM_NOTES
-        
-        ---
-        
-        ## Version Information
-        - Full version: \`${{ steps.version.outputs.new_version }}\`
-        - Minor version tag: \`${{ steps.version.outputs.minor_version }}\`
-        - Major version tag: \`${{ steps.version.outputs.major_version }}\`
-        
-        ## Updated Tags
-        $(if [ "${{ inputs.update_parent_tags }}" == "true" ]; then
-          if [ "${{ inputs.version_bump }}" == "patch" ]; then
-            echo "- \`${{ steps.version.outputs.minor_version }}\` → \`${{ steps.version.outputs.new_version }}\` (updated)"
-            echo "- \`${{ steps.version.outputs.major_version }}\` → \`${{ steps.version.outputs.new_version }}\` (updated)"
-          elif [ "${{ inputs.version_bump }}" == "minor" ]; then
-            echo "- \`${{ steps.version.outputs.minor_version }}\` → \`${{ steps.version.outputs.new_version }}\` (created)"
-            echo "- \`${{ steps.version.outputs.major_version }}\` → \`${{ steps.version.outputs.new_version }}\` (updated)"
-          elif [ "${{ inputs.version_bump }}" == "major" ]; then
-            echo "- \`${{ steps.version.outputs.minor_version }}\` → \`${{ steps.version.outputs.new_version }}\` (created)"
-            echo "- \`${{ steps.version.outputs.major_version }}\` → \`${{ steps.version.outputs.new_version }}\` (created)"
-          fi
-        else
-          echo "Parent tags not updated (update_parent_tags=false)"
-        fi)"
+        if [ -n "$INPUT_RELEASE_NOTES_FILE" ] && [ -f "$INPUT_RELEASE_NOTES_FILE" ]; then
+          cat "$INPUT_RELEASE_NOTES_FILE" >> "$NOTES_FILE"
+          printf '\n\n---\n\n' >> "$NOTES_FILE"
         else
           # Generate auto release notes
-          PREVIOUS_TAG="${{ steps.version.outputs.previous_version }}"
-          
-          if [ "$PREVIOUS_TAG" != "none" ]; then
-            AUTO_NOTES=$(git log ${PREVIOUS_TAG}..${{ steps.version.outputs.new_version }} --pretty=format:"- %s (%h)" --no-merges)
-          else
-            AUTO_NOTES="Initial release"
+          if [ -n "$INPUT_OVERVIEW_NOTE" ]; then
+            printf '%s\n' "$INPUT_OVERVIEW_NOTE" >> "$NOTES_FILE"
           fi
-          
-          RELEASE_NOTES="${{ inputs.overview_note }}
-        
-        ## Changes
-        
-        $AUTO_NOTES
-        
+
+          printf '\n## Changes\n\n' >> "$NOTES_FILE"
+
+          if [ "$PREVIOUS_VERSION" != "none" ]; then
+            git log "${PREVIOUS_VERSION}..${NEW_VERSION}" --pretty=format:"- %s (%h)" --no-merges >> "$NOTES_FILE"
+          else
+            printf 'Initial release\n' >> "$NOTES_FILE"
+          fi
+
+          printf '\n\n' >> "$NOTES_FILE"
+        fi
+
+        # Append version information
+        cat >> "$NOTES_FILE" << EOF
         ## Version Information
-        - Full version: \`${{ steps.version.outputs.new_version }}\`
-        - Minor version tag: \`${{ steps.version.outputs.minor_version }}\`
-        - Major version tag: \`${{ steps.version.outputs.major_version }}\`
-        
+        - Full version: \`${NEW_VERSION}\`
+        - Minor version tag: \`${MINOR_VERSION}\`
+        - Major version tag: \`${MAJOR_VERSION}\`
+
         ## Updated Tags
-        $(if [ "${{ inputs.update_parent_tags }}" == "true" ]; then
-          if [ "${{ inputs.version_bump }}" == "patch" ]; then
-            echo "- \`${{ steps.version.outputs.minor_version }}\` → \`${{ steps.version.outputs.new_version }}\` (updated)"
-            echo "- \`${{ steps.version.outputs.major_version }}\` → \`${{ steps.version.outputs.new_version }}\` (updated)"
-          elif [ "${{ inputs.version_bump }}" == "minor" ]; then
-            echo "- \`${{ steps.version.outputs.minor_version }}\` → \`${{ steps.version.outputs.new_version }}\` (created)"
-            echo "- \`${{ steps.version.outputs.major_version }}\` → \`${{ steps.version.outputs.new_version }}\` (updated)"
-          elif [ "${{ inputs.version_bump }}" == "major" ]; then
-            echo "- \`${{ steps.version.outputs.minor_version }}\` → \`${{ steps.version.outputs.new_version }}\` (created)"
-            echo "- \`${{ steps.version.outputs.major_version }}\` → \`${{ steps.version.outputs.new_version }}\` (created)"
+        EOF
+
+        if [ "$INPUT_UPDATE_PARENT_TAGS" == "true" ]; then
+          if [ "$INPUT_VERSION_BUMP" == "patch" ]; then
+            printf '%s\n' "- \`${MINOR_VERSION}\` → \`${NEW_VERSION}\` (updated)" >> "$NOTES_FILE"
+            printf '%s\n' "- \`${MAJOR_VERSION}\` → \`${NEW_VERSION}\` (updated)" >> "$NOTES_FILE"
+          elif [ "$INPUT_VERSION_BUMP" == "minor" ]; then
+            printf '%s\n' "- \`${MINOR_VERSION}\` → \`${NEW_VERSION}\` (created)" >> "$NOTES_FILE"
+            printf '%s\n' "- \`${MAJOR_VERSION}\` → \`${NEW_VERSION}\` (updated)" >> "$NOTES_FILE"
+          elif [ "$INPUT_VERSION_BUMP" == "major" ]; then
+            printf '%s\n' "- \`${MINOR_VERSION}\` → \`${NEW_VERSION}\` (created)" >> "$NOTES_FILE"
+            printf '%s\n' "- \`${MAJOR_VERSION}\` → \`${NEW_VERSION}\` (created)" >> "$NOTES_FILE"
           fi
         else
-          echo "Parent tags not updated (update_parent_tags=false)"
-        fi)"
+          printf '%s\n' "Parent tags not updated (update_parent_tags=false)" >> "$NOTES_FILE"
         fi
-        
+
         # Create the release (draft or published)
         DRAFT_FLAG=""
-        if [ "${{ inputs.draft_release }}" == "true" ]; then
+        if [ "$INPUT_DRAFT_RELEASE" == "true" ]; then
           DRAFT_FLAG="--draft"
-          echo "::notice::Creating draft release: ${{ steps.version.outputs.new_version }}"
+          echo "::notice::Creating draft release: ${NEW_VERSION}"
         fi
-        
-        gh release create "${{ steps.version.outputs.new_version }}" \
-          --title "Release ${{ steps.version.outputs.new_version }}" \
-          --notes "$RELEASE_NOTES" \
+
+        gh release create "$NEW_VERSION" \
+          --title "Release ${NEW_VERSION}" \
+          --notes-file "$NOTES_FILE" \
           $DRAFT_FLAG
-        
-        if [ "${{ inputs.draft_release }}" == "true" ]; then
-          echo "::notice::✅ Created draft GitHub release: ${{ steps.version.outputs.new_version }}"
+
+        if [ "$INPUT_DRAFT_RELEASE" == "true" ]; then
+          echo "::notice::✅ Created draft GitHub release: ${NEW_VERSION}"
         else
-          echo "::notice::✅ Created GitHub release: ${{ steps.version.outputs.new_version }}"
+          echo "::notice::✅ Created GitHub release: ${NEW_VERSION}"
         fi
 
     - name: Generate summary output
