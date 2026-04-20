@@ -84,12 +84,12 @@ runs:
         # Get the latest tag
         LATEST_TAG=$(git tag --list 'v*.*.*' --sort=-v:refname | head -n1)
         
-        # If no tags exist, always start with v1.0.0
+        # If no tags exist, always start with v0.0.0
         if [ -z "$LATEST_TAG" ]; then
-          echo "::notice::No existing semantic version tags found, starting with v1.0.0"
-          NEW_VERSION="v1.0.0"
-          MINOR_VERSION="v1.0"
-          MAJOR_VERSION="v1"
+          echo "::notice::No existing semantic version tags found, starting with v0.0.0"
+          NEW_VERSION="v0.0.1"
+          MINOR_VERSION="v0.0"
+          MAJOR_VERSION="v0"
           PREVIOUS_VERSION="none"
         else
           echo "Latest tag: $LATEST_TAG"
